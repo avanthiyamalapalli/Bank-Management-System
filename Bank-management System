@@ -1,0 +1,584 @@
+
+import mysql.connector
+from mysql.connector import Error
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+
+# 1. DATABASE CONNECTION
+
+def get_connection():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="181206",
+        database="payments"
+    )
+
+
+# 2. BANK ACCOUNT CLASS
+
+class BankAccount:
+
+    def __init__(self, account_no, customer_name):
+        self.account_no = account_no
+        self.customer_name = customer_name
+        self._balance = Decimal("0.00")
+
+    # 3. CREATE ACCOUNT
+
+    def create_account(self, initial_deposit):
+
+        initial_deposit = Decimal(str(initial_deposit))
+
+        if not initial_deposit.is_finite() or initial_deposit < 0:
+            raise ValueError("Invalid initial deposit.")
+
+        initial_deposit = initial_deposit.quantize(
+            Decimal("0.01")
+        )
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            conn.start_transaction()
+
+            cursor.execute(
+                """
+                INSERT INTO bankaccount
+                (account_no, customer_name, balance)
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    self.account_no,
+                    self.customer_name,
+                    initial_deposit
+                )
+            )
+
+            if initial_deposit > 0:
+
+                cursor.execute(
+                    """
+                    INSERT INTO transactions
+                    (account_no, transaction_type,
+                     amount, balance_after, transaction_date)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    """,
+                    (
+                        self.account_no,
+                        "INITIAL_DEPOSIT",
+                        initial_deposit,
+                        initial_deposit
+                    )
+                )
+
+            conn.commit()
+
+            self._balance = initial_deposit
+
+            print("\nAccount created successfully!")
+
+        except Exception:
+            if conn and conn.is_connected():
+                conn.rollback()
+            raise
+
+        finally:
+            if cursor:
+                cursor.close()
+
+            if conn and conn.is_connected():
+                conn.close()
+
+    # 4. CHECK BALANCE
+
+    def get_balance(self):
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT balance
+                FROM bankaccount
+                WHERE account_no = %s
+                """,
+                (self.account_no,)
+            )
+
+            result = cursor.fetchone()
+
+            if result is None:
+                raise ValueError("Account does not exist.")
+
+            self._balance = Decimal(str(result[0]))
+
+            return self._balance
+
+        finally:
+            if cursor:
+                cursor.close()
+
+            if conn and conn.is_connected():
+                conn.close()
+
+    # 5. DEPOSIT MONEY
+
+    def deposit(self, amount):
+
+        amount = Decimal(str(amount))
+
+        if not amount.is_finite() or amount <= 0:
+            raise ValueError("Deposit amount must be positive.")
+
+        amount = amount.quantize(Decimal("0.01"))
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            conn.start_transaction()
+
+            cursor.execute(
+                """
+                SELECT balance
+                FROM bankaccount
+                WHERE account_no = %s
+                FOR UPDATE
+                """,
+                (self.account_no,)
+            )
+
+            result = cursor.fetchone()
+
+            if result is None:
+                raise ValueError("Account does not exist.")
+
+            balance = Decimal(str(result[0]))
+
+            new_balance = balance + amount
+
+            cursor.execute(
+                """
+                UPDATE bankaccount
+                SET balance = %s
+                WHERE account_no = %s
+                """,
+                (new_balance, self.account_no)
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO transactions
+                (account_no, transaction_type,
+                 amount, balance_after, transaction_date)
+                VALUES (%s, %s, %s, %s, NOW())
+                """,
+                (
+                    self.account_no,
+                    "DEPOSIT",
+                    amount,
+                    new_balance
+                )
+            )
+
+            conn.commit()
+
+            self._balance = new_balance
+
+            print("\nDeposit successful!")
+            print("Deposited Amount: Rs.", amount)
+            print("Current Balance: Rs.", new_balance)
+
+        except Exception:
+            if conn and conn.is_connected():
+                conn.rollback()
+            raise
+
+        finally:
+            if cursor:
+                cursor.close()
+
+            if conn and conn.is_connected():
+                conn.close()
+
+    # 6. WITHDRAW MONEY
+
+    def withdraw(self, amount):
+
+        amount = Decimal(str(amount))
+
+        if not amount.is_finite() or amount <= 0:
+            raise ValueError("Withdrawal amount must be positive.")
+
+        amount = amount.quantize(Decimal("0.01"))
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            conn.start_transaction()
+
+            cursor.execute(
+                """
+                SELECT balance
+                FROM bankaccount
+                WHERE account_no = %s
+                FOR UPDATE
+                """,
+                (self.account_no,)
+            )
+
+            result = cursor.fetchone()
+
+            if result is None:
+                raise ValueError("Account does not exist.")
+
+            balance = Decimal(str(result[0]))
+
+            if amount > balance:
+                raise ValueError("Insufficient balance!")
+
+            new_balance = balance - amount
+
+            cursor.execute(
+                """
+                UPDATE bankaccount
+                SET balance = %s
+                WHERE account_no = %s
+                """,
+                (new_balance, self.account_no)
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO transactions
+                (account_no, transaction_type,
+                 amount, balance_after, transaction_date)
+                VALUES (%s, %s, %s, %s, NOW())
+                """,
+                (
+                    self.account_no,
+                    "WITHDRAW",
+                    amount,
+                    new_balance
+                )
+            )
+
+            conn.commit()
+
+            self._balance = new_balance
+
+            print("\nWithdrawal successful!")
+            print("Withdrawn Amount: Rs.", amount)
+            print("Remaining Balance: Rs.", new_balance)
+
+        except Exception:
+            if conn and conn.is_connected():
+                conn.rollback()
+            raise
+
+        finally:
+            if cursor:
+                cursor.close()
+
+            if conn and conn.is_connected():
+                conn.close()
+
+    # 7. SIMPLE INTEREST CALCULATION
+
+    def calculate_interest(self, rate, years):
+
+        rate = Decimal(str(rate))
+        years = Decimal(str(years))
+
+        if not rate.is_finite() or not years.is_finite():
+            raise ValueError("Invalid interest input.")
+
+        if rate < 0 or years <= 0:
+            raise ValueError("Invalid rate or time.")
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            conn.start_transaction()
+
+            cursor.execute(
+                """
+                SELECT balance
+                FROM bankaccount
+                WHERE account_no = %s
+                FOR UPDATE
+                """,
+                (self.account_no,)
+            )
+
+            result = cursor.fetchone()
+
+            if result is None:
+                raise ValueError("Account does not exist.")
+
+            balance = Decimal(str(result[0]))
+
+            # Simple Interest Formula
+            interest = (
+                balance * rate * years / Decimal("100")
+            ).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP
+            )
+
+            new_balance = balance + interest
+
+            cursor.execute(
+                """
+                UPDATE bankaccount
+                SET balance = %s
+                WHERE account_no = %s
+                """,
+                (new_balance, self.account_no)
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO transactions
+                (account_no, transaction_type,
+                 amount, balance_after, transaction_date)
+                VALUES (%s, %s, %s, %s, NOW())
+                """,
+                (
+                    self.account_no,
+                    "INTEREST",
+                    interest,
+                    new_balance
+                )
+            )
+
+            conn.commit()
+
+            self._balance = new_balance
+
+            print("\nInterest credited successfully!")
+            print("Interest Amount: Rs.", interest)
+            print("Updated Balance: Rs.", new_balance)
+
+        except Exception:
+            if conn and conn.is_connected():
+                conn.rollback()
+            raise
+
+        finally:
+            if cursor:
+                cursor.close()
+
+            if conn and conn.is_connected():
+                conn.close()
+
+    # 8. TRANSACTION HISTORY
+
+    def transaction_history(self):
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT transaction_type,
+                       amount,
+                       transaction_date,
+                       balance_after
+                FROM transactions
+                WHERE account_no = %s
+                ORDER BY transaction_date, transaction_id
+                """,
+                (self.account_no,)
+            )
+
+            records = cursor.fetchall()
+
+            print("\n========== TRANSACTION HISTORY ==========")
+
+            if not records:
+                print("No transactions found.")
+                return
+
+            for record in records:
+
+                print("------------------------------------")
+                print("Transaction Type:", record[0])
+                print("Amount: Rs.", record[1])
+                print("Date:", record[2])
+                print("Balance After Transaction: Rs.", record[3])
+
+            print("------------------------------------")
+
+        finally:
+            if cursor:
+                cursor.close()
+
+            if conn and conn.is_connected():
+                conn.close()
+
+
+# 9. MAIN FUNCTION
+
+def main():
+
+    print("\n===== BANK MANAGEMENT SYSTEM =====")
+
+    account_no = int(input("Enter Account Number: "))
+
+    if account_no <= 0:
+        raise ValueError("Account number must be positive.")
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT customer_name
+            FROM bankaccount
+            WHERE account_no = %s
+            """,
+            (account_no,)
+        )
+
+        result = cursor.fetchone()
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if conn and conn.is_connected():
+            conn.close()
+
+    # AUTOMATIC ACCOUNT IDENTIFICATION
+
+    if result:
+
+        customer_name = result[0]
+
+        print("\nWelcome Back,", customer_name)
+
+    else:
+
+        print("\nCreate New Bank Account")
+
+        customer_name = input("Enter Customer Name: ").strip()
+
+        if not customer_name:
+            raise ValueError("Customer name cannot be empty.")
+
+        initial_deposit = Decimal(
+            input("Enter Initial Deposit: ")
+        )
+
+        account = BankAccount(account_no, customer_name)
+
+        account.create_account(initial_deposit)
+
+    account = BankAccount(account_no, customer_name)
+
+    # MENU-DRIVEN APPLICATION
+
+    while True:
+
+        print("\n========== BANK MENU ==========")
+        print("1. Check Balance")
+        print("2. Deposit Money")
+        print("3. Withdraw Money")
+        print("4. Calculate Simple Interest")
+        print("5. Transaction History")
+        print("6. Exit")
+
+        choice = input("\nEnter Your Choice: ")
+
+        if choice == "1":
+
+            balance = account.get_balance()
+
+            print("\nCurrent Balance: Rs.", balance)
+
+        elif choice == "2":
+
+            amount = Decimal(
+                input("Enter Deposit Amount: ")
+            )
+
+            account.deposit(amount)
+
+        elif choice == "3":
+
+            amount = Decimal(
+                input("Enter Withdrawal Amount: ")
+            )
+
+            account.withdraw(amount)
+
+        elif choice == "4":
+
+            rate = Decimal(
+                input("Enter Interest Rate (%): ")
+            )
+
+            years = Decimal(
+                input("Enter Time in Years: ")
+            )
+
+            account.calculate_interest(rate, years)
+
+        elif choice == "5":
+
+            account.transaction_history()
+
+        elif choice == "6":
+
+            print("\nThank you for using Bank Management System!")
+            break
+
+        else:
+
+            print("Invalid choice! Please try again.")
+
+
+# 10. PROGRAM EXECUTION
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except Error as e:
+        print("\nDatabase Error:", e)
+
+    except (ValueError, InvalidOperation) as e:
+        print("\nInvalid Input:", e)
+
+    except Exception as e:
+        print("\nUnexpected Error:", e)
